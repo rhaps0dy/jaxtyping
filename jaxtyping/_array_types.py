@@ -77,6 +77,40 @@ _any_dtype = object()
 _anonymous_dim = object()
 _anonymous_variadic_dim = object()
 
+# Registry for custom array type handlers.
+# Maps array types to handler functions with signature:
+#   (cls, obj, single_memo, variadic_memo, arg_memo) -> str
+# Handler returns "" on success, error message on failure.
+_custom_array_handlers: dict[type, typing.Callable] = {}
+
+
+def register_array_handler(
+    array_type: type,
+    handler: typing.Callable[[type, object, dict, dict, dict], str],
+) -> None:
+    """Register a custom type-checking handler for an array type.
+
+    This allows external libraries (like Penzai's NamedArray) to integrate
+    with jaxtyping's type checking system without modifying jaxtyping itself.
+
+    Args:
+        array_type: The array type class to register a handler for.
+        handler: A callable that performs type checking. It receives:
+            - cls: The jaxtyping type annotation class
+            - obj: The object being type-checked
+            - single_memo: Dict for single dimension bindings
+            - variadic_memo: Dict for variadic dimension bindings
+            - arg_memo: Dict for argument values
+
+            Returns "" on success, or an error message string on failure.
+    """
+    _custom_array_handlers[array_type] = handler
+
+
+def unregister_array_handler(array_type: type) -> None:
+    """Remove a registered handler for an array type."""
+    _custom_array_handlers.pop(array_type, None)
+
 
 class _DimType(enum.Enum):
     named = enum.auto()
@@ -190,12 +224,22 @@ class _MetaAbstractArray(type):
     def __instancecheck_str__(cls, obj: Any) -> str:
         if cls._skip_instancecheck:
             return ""
+
+        check_shape_handler = cls._check_shape
         if cls.array_type is Any:
             if not (hasattr(obj, "shape") and hasattr(obj, "dtype")):
                 return "this value does not have both `shape` and `dtype` attributes."
         else:
             if not isinstance(obj, cls.array_type):
                 return f"this value is not an instance of the underlying array type {cls.array_type}"  # noqa: E501
+
+            for registered_type, registered_handler in _custom_array_handlers.items():
+                if cls.array_type is registered_type or (
+                    isinstance(cls.array_type, type)
+                    and issubclass(cls.array_type, registered_type)
+                ):
+                    check_shape_handler = ft.partial(registered_handler, cls)
+                    break
         if get_treeflatten_memo():
             return ""
 
@@ -239,7 +283,7 @@ class _MetaAbstractArray(type):
         pytree_memo_bak = pytree_memo.copy()
         arg_memo_bak = arg_memo.copy()
         try:
-            check = cls._check_shape(obj, single_memo, variadic_memo, arg_memo)
+            check = check_shape_handler(obj, single_memo, variadic_memo, arg_memo)
         except Exception:
             set_shape_memo(
                 single_memo_bak, variadic_memo_bak, pytree_memo_bak, arg_memo_bak

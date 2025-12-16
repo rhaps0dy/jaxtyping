@@ -28,7 +28,9 @@ from ._array_types import (
     AbstractDtype as AbstractDtype,
     get_array_name_format as get_array_name_format,
     make_numpy_struct_dtype as make_numpy_struct_dtype,
+    register_array_handler as register_array_handler,
     set_array_name_format as set_array_name_format,
+    unregister_array_handler as unregister_array_handler,
 )
 from ._config import config as config
 from ._decorator import jaxtyped as jaxtyped
